@@ -1,0 +1,452 @@
+{
+  "name": "monitoring-terminow-bhp",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "triggerAtHour": 7
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        0,
+        0
+      ],
+      "id": "9e3a2ffe-a033-4736-8774-df53ef09c07c",
+      "name": "Schedule Trigger"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT id, imie_nazwisko, typ_szkolenia, data_waznosci, email_przelozonego, (data_waznosci - CURRENT_DATE) AS dni_do_wygasniecia\nFROM szkolenia_bhp\nWHERE (data_waznosci - CURRENT_DATE) BETWEEN -30 AND 30\nORDER BY data_waznosci ASC",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        224,
+        0
+      ],
+      "id": "679c64f3-79bd-4ede-a6fa-e5142a779de9",
+      "name": "Execute a SQL query",
+      "retryOnFail": true,
+      "waitBetweenTries": 5000,
+      "credentials": {
+        "postgres": {
+          "id": "RAZv2AIf231fmI0U",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.dni_do_wygasniecia }}",
+                    "rightValue": 7,
+                    "operator": {
+                      "type": "number",
+                      "operation": "lte"
+                    },
+                    "id": "0bd53478-7369-4300-8380-46edc6ee082c"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "pilne"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "004ebfd2-81ff-4229-bfbf-a67c5e333a66",
+                    "leftValue": "={{ $json.dni_do_wygasniecia }}",
+                    "rightValue": 14,
+                    "operator": {
+                      "type": "number",
+                      "operation": "lte"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "zblizajace"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "df90b017-3516-4425-ba37-38ad118c7718",
+                    "leftValue": "={{ $json.dni_do_wygasniecia }}",
+                    "rightValue": 30,
+                    "operator": {
+                      "type": "number",
+                      "operation": "lte"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "wczesne"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.4,
+      "position": [
+        448,
+        -16
+      ],
+      "id": "0a3bbf20-1100-47b9-8678-118ea3e79457",
+      "name": "Switch"
+    },
+    {
+      "parameters": {
+        "fromEmail": "jacek@szulc.cc",
+        "toEmail": "={{ $json.email_przelozonego }}",
+        "subject": "=PILNE: {{ $json.imie_nazwisko }} — {{ $json.typ_szkolenia }}",
+        "html": "={{ $json.dni_do_wygasniecia < 0 ? 'Termin minął ' + Math.abs($json.dni_do_wygasniecia) + ' dni temu' : 'Pozostało ' + $json.dni_do_wygasniecia + ' dni' }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        688,
+        -224
+      ],
+      "id": "a86e91d9-c68c-485d-840f-583816531b10",
+      "name": "Send an Email",
+      "webhookId": "b6f64b1d-ae16-498e-b9c7-59fbc61e098e",
+      "retryOnFail": true,
+      "waitBetweenTries": 5000,
+      "credentials": {
+        "smtp": {
+          "id": "HlDYdYAhTqpt0aTT",
+          "name": "SMTP account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "fromEmail": "jacek@szulc.cc",
+        "toEmail": "={{ $json.email_przelozonego }}",
+        "subject": "=Zbliża się termin: {{ $json.imie_nazwisko }} — {{ $json.typ_szkolenia }}",
+        "html": "=<p>Termin ważności upływa <strong>{{ $json.data_waznosci }}</strong> (za {{ $json.dni_do_wygasniecia }} dni).</p>\n<p>Proszę o zaplanowanie terminu w najbliższych dniach.</p>",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        688,
+        0
+      ],
+      "id": "172dc355-0caf-4ee8-ad3a-fed2767cf00f",
+      "name": "Send an Email1",
+      "webhookId": "b6f64b1d-ae16-498e-b9c7-59fbc61e098e",
+      "executeOnce": false,
+      "retryOnFail": true,
+      "waitBetweenTries": 5000,
+      "credentials": {
+        "smtp": {
+          "id": "HlDYdYAhTqpt0aTT",
+          "name": "SMTP account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "fromEmail": "jacek@szulc.cc",
+        "toEmail": "={{ $json.email_przelozonego }}",
+        "subject": "=Do zaplanowania: {{ $json.imie_nazwisko }} — {{ $json.typ_szkolenia }}",
+        "html": "=<p>Termin ważności upływa <strong>{{ $json.data_waznosci }}</strong> (za {{ $json.dni_do_wygasniecia }} dni).</p>\n<p>Wiadomość informacyjna — termin można zaplanować w tym miesiącu.</p>",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        688,
+        224
+      ],
+      "id": "be9bd799-6b6e-4175-880a-c7cffff6c514",
+      "name": "Send an Email2",
+      "webhookId": "b6f64b1d-ae16-498e-b9c7-59fbc61e098e",
+      "retryOnFail": true,
+      "waitBetweenTries": 5000,
+      "credentials": {
+        "smtp": {
+          "id": "HlDYdYAhTqpt0aTT",
+          "name": "SMTP account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "schema": {
+          "__rl": true,
+          "mode": "list",
+          "value": "public"
+        },
+        "table": {
+          "__rl": true,
+          "value": "logi_wykonan",
+          "mode": "list",
+          "cachedResultName": "logi_wykonan"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "liczba_rekordow": "={{ $('Execute a SQL query').all().length }}",
+            "liczba_maili": "={{ $input.all().length }}",
+            "status": "OK"
+          },
+          "matchingColumns": [
+            "id"
+          ],
+          "schema": [
+            {
+              "id": "id",
+              "displayName": "id",
+              "required": false,
+              "defaultMatch": true,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true,
+              "removed": true
+            },
+            {
+              "id": "data_wykonania",
+              "displayName": "data_wykonania",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "dateTime",
+              "canBeUsedToMatch": true,
+              "removed": true
+            },
+            {
+              "id": "liczba_rekordow",
+              "displayName": "liczba_rekordow",
+              "required": true,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "liczba_maili",
+              "displayName": "liczba_maili",
+              "required": true,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "status",
+              "displayName": "status",
+              "required": true,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "komunikat_bledu",
+              "displayName": "komunikat_bledu",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "czas_trwania_ms",
+              "displayName": "czas_trwania_ms",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true,
+              "removed": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        1312,
+        16
+      ],
+      "id": "37b7ae67-9fda-4036-a73e-a2547e3172d4",
+      "name": "Insert rows in a table",
+      "executeOnce": true,
+      "credentials": {
+        "postgres": {
+          "id": "RAZv2AIf231fmI0U",
+          "name": "Postgres account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "numberInputs": 3
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        1120,
+        0
+      ],
+      "id": "fafcbd8b-6c34-40a0-97c1-0ed11d072f38",
+      "name": "Merge"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Execute a SQL query",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute a SQL query": {
+      "main": [
+        [
+          {
+            "node": "Switch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Switch": {
+      "main": [
+        [
+          {
+            "node": "Send an Email",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send an Email1",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send an Email2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send an Email1": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Send an Email": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send an Email2": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 2
+          }
+        ]
+      ]
+    },
+    "Merge": {
+      "main": [
+        [
+          {
+            "node": "Insert rows in a table",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false,
+    "timeSavedMode": "fixed",
+    "errorWorkflow": "fIdzD51p0IgXu1DT",
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "versionId": "abfa5833-0179-47bf-9ee3-a31a3ead3185",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "8e79e4bd1d8563e921dc3e8f4a79b125a056d84f1aaef24a252eb23d7ff44174"
+  },
+  "nodeGroups": [],
+  "id": "qXCAYyNwyGo12ZPa",
+  "tags": []
+}

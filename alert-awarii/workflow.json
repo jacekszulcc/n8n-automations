@@ -1,0 +1,71 @@
+{
+  "name": "alert-awarii",
+  "nodes": [
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ],
+      "id": "c8ae0891-ce59-402c-8c05-0b5ffa43c877",
+      "name": "Error Trigger"
+    },
+    {
+      "parameters": {
+        "fromEmail": "jacek@szulc.cc",
+        "toEmail": "jacek@szulc.cc",
+        "subject": "=[n8n] Awaria: {{ $json.workflow.name }}",
+        "emailFormat": "text",
+        "text": "=Workflow: {{ $json.workflow.name }}\nCzas: {{ $now.format('yyyy-MM-dd HH:mm:ss') }}\nBlad: {{ $json.execution.error.message }}\nWezel: {{ $json.execution.lastNodeExecuted }}\nURL: {{ $json.execution.url }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        224,
+        0
+      ],
+      "id": "76370dd7-8e1f-43b6-8eb9-2af406b318a7",
+      "name": "Send an Email",
+      "webhookId": "eb700d12-cd38-4104-8e25-009aa177e189",
+      "retryOnFail": true,
+      "waitBetweenTries": 5000,
+      "credentials": {
+        "smtp": {
+          "id": "HlDYdYAhTqpt0aTT",
+          "name": "SMTP account"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Error Trigger": {
+      "main": [
+        [
+          {
+            "node": "Send an Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "versionId": "a39a017a-558e-41e3-9de9-ee0224b758c5",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "8e79e4bd1d8563e921dc3e8f4a79b125a056d84f1aaef24a252eb23d7ff44174"
+  },
+  "nodeGroups": [],
+  "id": "fIdzD51p0IgXu1DT",
+  "tags": []
+}
