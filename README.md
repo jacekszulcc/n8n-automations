@@ -85,5 +85,3 @@ i treść komunikatu.*
 ## Środowisko
 
 n8n w kontenerze Docker na własnym serwerze (Unraid). PostgreSQL w osobnym kontenerze.
-Nginx Proxy Manager z obsługą WebSocketów. Bez tej obsługi interfejs edytora działa, ale
-uruchomienie przepływu zrywa połączenie.
