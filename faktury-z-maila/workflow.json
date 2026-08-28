@@ -1,0 +1,1651 @@
+{
+  "name": "faktury-z-maila",
+  "nodes": [
+    {
+      "parameters": {
+        "format": "resolved",
+        "options": {
+          "trackLastMessageId": true
+        }
+      },
+      "type": "n8n-nodes-base.emailReadImap",
+      "typeVersion": 2.2,
+      "position": [
+        0,
+        0
+      ],
+      "id": "6cc88a65-1db6-4579-a956-c04af9cbefef",
+      "name": "Email Trigger (IMAP)",
+      "notesInFlow": true,
+      "credentials": {
+        "imap": {
+          "id": "IDlXj7dWfUhVIVFH",
+          "name": "IMAP account"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "notes": "Mark as Read: oznaczenie następuje przy pobraniu, nie po\nsukcesie przepływu. Mail utracony w dalszej części nie wróci\nprzy kolejnym uruchomieniu."
+    },
+    {
+      "parameters": {
+        "modelName": "models/gemini-3.5-flash-lite",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1.1,
+      "position": [
+        896,
+        112
+      ],
+      "id": "13f638f2-c5fa-4eff-9556-5677b1843a73",
+      "name": "Google Gemini Chat Model",
+      "credentials": {
+        "googlePalmApi": {
+          "id": "DPkVxaRkkNmv66LM",
+          "name": "Gemini"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "schemaType": "manual",
+        "inputSchema": "{\n  \"type\": \"object\",\n  \"properties\": {\n    \"czyFaktura\": { \"type\": \"boolean\" },\n    \"numerFaktury\": { \"type\": [\"string\", \"null\"] },\n    \"dataWystawienia\": { \"type\": [\"string\", \"null\"] },\n    \"dataSprzedazy\": { \"type\": [\"string\", \"null\"] },\n    \"sprzedawcaNazwa\": { \"type\": [\"string\", \"null\"] },\n    \"sprzedawcaNip\": { \"type\": [\"string\", \"null\"] },\n    \"nabywcaNazwa\": { \"type\": [\"string\", \"null\"] },\n    \"nabywcaNip\": { \"type\": [\"string\", \"null\"] },\n    \"kwotaNetto\": { \"type\": [\"number\", \"null\"] },\n    \"kwotaBrutto\": { \"type\": [\"number\", \"null\"] },\n    \"terminPlatnosci\": { \"type\": [\"string\", \"null\"] },\n    \"statusPlatnosci\": { \"type\": [\"string\", \"null\"] }\n  },\n  \"required\": [\"czyFaktura\"]\n}"
+      },
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.3,
+      "position": [
+        1040,
+        112
+      ],
+      "id": "d65704f7-f18b-4a0c-b0bc-e4743942fa5f",
+      "name": "Structured Output Parser"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Rozbijamy każdą wiadomość (item) na osobne itemy, po jednym na załącznik.\n// Referencję do gotowych danych binarnych kopiujemy bezpośrednio\n// (item.binary[klucz]) - dane przygotował już Email Trigger, więc nie ma\n// czego budować przez this.helpers.prepareBinaryData(). Ten helper jest\n// potrzebny tylko przy tworzeniu binarki od zera z surowego Buffera.\nconst wynik = [];\n\nfor (const item of $input.all()) {\n  // Wiadomość bez sekcji binarnej (brak załączników) - pomijamy bez błędu,\n  // to normalna ścieżka, nie wyjątek.\n  if (!item.binary) {\n    continue;\n  }\n\n  // \"from\" to obiekt mailparsera, nie string - adres siedzi w value[0].address.\n  // Zabezpieczenie na wypadek pustej/brakującej tablicy: taki mail jest\n  // patologiczny, ale to nie powód, żeby gubić fakturę razem z załącznikiem.\n  // Zamiast pomijać całą wiadomość, zostawiam nadawcę jako null - dalszy\n  // filtr porównujący nadawcę z wystawcą faktury dostanie jawny sygnał\n  // \"nie da się zweryfikować\" i będzie mógł skierować item do ręcznej\n  // weryfikacji zamiast po cichu zniknąć razem z dokumentem.\n  const adresNadawcy = item.json.from?.value?.[0]?.address ?? null;\n\n  // Kontekst wiadomości zapisany raz na item wejściowy, bo po rozbiciu\n  // na osobne itemy załącznikowe traci się powiązanie z oryginalnym mailem.\n  // idWiadomosci trzyma messageId, nie attributes.uid - uid jest unikalny\n  // tylko w obrębie jednego folderu IMAP i unieważnia się przy operacjach\n  // na skrzynce, więc nie nadaje się do identyfikacji wiadomości w dalszych\n  // krokach przepływu.\n  const kontekstWiadomosci = {\n    nadawca: adresNadawcy,\n    temat: item.json.subject,\n    data: item.json.date,\n    idWiadomosci: item.json.messageId,\n  };\n\n  // Klucze załączników (attachment_0, attachment_1, ...) są dynamiczne\n  // i różne dla każdej wiadomości, więc iterujemy po Object.keys zamiast\n  // zakładać konkretną nazwę albo maksymalną liczbę.\n  for (const klucz of Object.keys(item.binary)) {\n    const zalacznik = item.binary[klucz];\n\n    wynik.push({\n      json: {\n        ...kontekstWiadomosci,\n        nazwaPliku: zalacznik.fileName,\n        typMime: zalacznik.mimeType,\n      },\n      // Stała nazwa \"zalacznik\" niezależnie od oryginalnego klucza -\n      // kolejne węzły zawsze odwołują się do tego samego pola binarnego,\n      // bez sprawdzania, którym z kolei załącznikiem w mailu on był.\n      binary: {\n        zalacznik: zalacznik,\n      },\n    });\n  }\n}\n\nreturn wynik;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        224,
+        0
+      ],
+      "id": "e78cc91f-02f6-4bef-a9bd-963575d05bd4",
+      "name": "Rozbij załączniki"
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.typMime }}",
+                    "rightValue": "=application/pdf",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "id": "971a9af8-b0a1-4116-8a44-bdbc64bb9ae0"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "pdf"
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra"
+        }
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.4,
+      "position": [
+        448,
+        0
+      ],
+      "id": "f5b80e2e-3c51-4f27-8d3c-d40381139994",
+      "name": "Filtr PDF"
+    },
+    {
+      "parameters": {
+        "operation": "pdf",
+        "binaryPropertyName": "zalacznik",
+        "options": {
+          "joinPages": true,
+          "keepSource": "json"
+        }
+      },
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1.1,
+      "position": [
+        672,
+        -96
+      ],
+      "id": "f56e5171-34a0-4235-abb4-fa3e9b6cb053",
+      "name": "Wyciągnij tekst z PDF"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Jesteś parserem faktur. Otrzymujesz tekst wyciągnięty z pliku PDF.\nZwracasz wyłącznie dane, które faktycznie znajdują się w tekście.\n\nZASADA NADRZĘDNA: jeśli danej nie ma w tekście albo nie masz pewności,\nzwróć null. Nigdy nie zgaduj, nie uzupełniaj z wiedzy ogólnej i nie\nwyliczaj brakujących wartości z innych pól.\n\n1. Najpierw rozstrzygnij, czy dokument jest fakturą.\n   Fakturą NIE są: potwierdzenia przelewu, wyciągi bankowe, zamówienia,\n   oferty, paragony, noty księgowe. Uwaga: potwierdzenie przelewu często\n   zawiera numer faktury, kwotę i nazwy obu firm — sama ich obecność\n   nie czyni z niego faktury.\n   Jeśli to nie faktura, ustaw czyFaktura na false, a wszystkie\n   pozostałe pola na null.\n\n2. Sprzedawca i nabywca to dwie różne strony. Nie zamieniaj ich\n   miejscami i nie wnioskuj o nich z niczego poza treścią dokumentu.\n   Etykiety w tekście mogą być rozbite spacjami (np. \"NABY WCA\").\n\n3. Kwoty zwracaj jako liczby, nie tekst. W dokumencie separatorem\n   tysięcy jest spacja, a dziesiętnym przecinek: \"4 920,00\" to 4920.00.\n\n4. Daty zwracaj w formacie YYYY-MM-DD. W dokumencie występują\n   jako DD.MM.YYYY.\n\n5. Termin płatności to data, do której należy zapłacić.\n   Jeśli dokument mówi, że zapłacono, ustaw statusPlatnosci\n   na \"zaplacono\", a terminPlatnosci na null — data zapłaty\n   nie jest terminem płatności.\n   Jeśli podano termin, ustaw statusPlatnosci na \"do_zaplaty\".\n\nTekst dokumentu:\n{{ $json.text }}",
+        "hasOutputParser": true,
+        "batching": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.9,
+      "position": [
+        896,
+        -96
+      ],
+      "id": "65044a95-c55a-4851-a7e3-47ae0b4f6f13",
+      "name": "Wyciągnij dane faktury"
+    },
+    {
+      "parameters": {
+        "schema": {
+          "__rl": true,
+          "mode": "list",
+          "value": "public"
+        },
+        "table": {
+          "__rl": true,
+          "value": "faktury",
+          "mode": "list",
+          "cachedResultName": "faktury"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "kwota_netto": "={{ $json.output.kwotaNetto }}",
+            "kwota_brutto": "={{ $json.output.kwotaBrutto }}",
+            "numer_faktury": "={{ $json.output.numerFaktury }}",
+            "data_wystawienia": "={{ $json.output.dataWystawienia }}",
+            "sprzedawca_nazwa": "={{ $json.output.sprzedawcaNazwa }}",
+            "sprzedawca_nip": "={{ $json.output.sprzedawcaNip }}",
+            "nabywca_nip": "={{ $json.output.nabywcaNip }}",
+            "nabywca_nazwa": "={{ $json.output.nabywcaNazwa }}",
+            "termin_platnosci": "={{ $json.output.terminPlatnosci }}",
+            "status_platnosci": "={{ $json.output.statusPlatnosci }}",
+            "data_sprzedazy": "={{ $json.output.dataSprzedazy }}",
+            "id_wiadomosci": "={{ $('Wyciągnij tekst z PDF').item.json.idWiadomosci }}",
+            "nazwa_pliku": "={{ $('Wyciągnij tekst z PDF').item.json.nazwaPliku }}",
+            "data_otrzymania": "={{ $('Wyciągnij tekst z PDF').item.json.data }}"
+          },
+          "matchingColumns": [
+            "id"
+          ],
+          "schema": [
+            {
+              "id": "id",
+              "displayName": "id",
+              "required": false,
+              "defaultMatch": true,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true,
+              "removed": true
+            },
+            {
+              "id": "id_wiadomosci",
+              "displayName": "id_wiadomosci",
+              "required": true,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "nazwa_pliku",
+              "displayName": "nazwa_pliku",
+              "required": true,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "data_przetworzenia",
+              "displayName": "data_przetworzenia",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "dateTime",
+              "canBeUsedToMatch": true,
+              "removed": true
+            },
+            {
+              "id": "numer_faktury",
+              "displayName": "numer_faktury",
+              "required": true,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "data_wystawienia",
+              "displayName": "data_wystawienia",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "dateTime",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "data_sprzedazy",
+              "displayName": "data_sprzedazy",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "dateTime",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "sprzedawca_nazwa",
+              "displayName": "sprzedawca_nazwa",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "sprzedawca_nip",
+              "displayName": "sprzedawca_nip",
+              "required": true,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "nabywca_nazwa",
+              "displayName": "nabywca_nazwa",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "nabywca_nip",
+              "displayName": "nabywca_nip",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "kwota_netto",
+              "displayName": "kwota_netto",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "kwota_brutto",
+              "displayName": "kwota_brutto",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "termin_platnosci",
+              "displayName": "termin_platnosci",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "dateTime",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "status_platnosci",
+              "displayName": "status_platnosci",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "data_otrzymania",
+              "displayName": "data_otrzymania",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "dateTime",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {
+          "queryBatching": "independently"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        1600,
+        -144
+      ],
+      "id": "67cb527b-8bfc-4ec1-85ad-3e8264e3ca9e",
+      "name": "Zapisz fakturę",
+      "credentials": {
+        "postgres": {
+          "id": "RAZv2AIf231fmI0U",
+          "name": "Postgres account"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "1c71a96e-60eb-4595-adc6-082572ecd0e4",
+              "leftValue": "={{ $json.output.czyFaktura }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1248,
+        -96
+      ],
+      "id": "23f83aec-9d7c-4b2e-88b5-a9321054929f",
+      "name": "If"
+    },
+    {
+      "parameters": {
+        "schema": {
+          "__rl": true,
+          "mode": "list",
+          "value": "public"
+        },
+        "table": {
+          "__rl": true,
+          "value": "do_weryfikacji",
+          "mode": "list",
+          "cachedResultName": "do_weryfikacji"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "id_wiadomosci": "={{ $('Wyciągnij tekst z PDF').item.json.idWiadomosci }}",
+            "nazwa_pliku": "={{ $('Wyciągnij tekst z PDF').item.json.nazwaPliku }}",
+            "powod": "nie_faktura",
+            "data_otrzymania": "={{ $('Wyciągnij tekst z PDF').item.json.data }}",
+            "szczegoly": "Model rozpoznał dokument jako niebędący fakturą",
+            "surowy_odczyt": "={{ $('Wyciągnij tekst z PDF').item.json.text }}"
+          },
+          "matchingColumns": [
+            "id"
+          ],
+          "schema": [
+            {
+              "id": "id",
+              "displayName": "id",
+              "required": false,
+              "defaultMatch": true,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true,
+              "removed": true
+            },
+            {
+              "id": "id_wiadomosci",
+              "displayName": "id_wiadomosci",
+              "required": true,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "nazwa_pliku",
+              "displayName": "nazwa_pliku",
+              "required": true,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "data_otrzymania",
+              "displayName": "data_otrzymania",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "dateTime",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "data_przetworzenia",
+              "displayName": "data_przetworzenia",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "dateTime",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "powod",
+              "displayName": "powod",
+              "required": true,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "szczegoly",
+              "displayName": "szczegoly",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "surowy_odczyt",
+              "displayName": "surowy_odczyt",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "status_obslugi",
+              "displayName": "status_obslugi",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        1600,
+        144
+      ],
+      "id": "098736d3-174d-43e5-83b6-17511a4b4798",
+      "name": "Zapisz do weryfikacji — nie faktura",
+      "credentials": {
+        "postgres": {
+          "id": "RAZv2AIf231fmI0U",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "schema": {
+          "__rl": true,
+          "mode": "list",
+          "value": "public"
+        },
+        "table": {
+          "__rl": true,
+          "value": "do_weryfikacji",
+          "mode": "list",
+          "cachedResultName": "do_weryfikacji"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "id_wiadomosci": "={{ $json.idWiadomosci }}",
+            "nazwa_pliku": "={{ $json.nazwaPliku }}",
+            "powod": "nieobslugiwany_typ",
+            "data_otrzymania": "={{ $json.data }}",
+            "szczegoly": "={{ $json.typMime }}"
+          },
+          "matchingColumns": [
+            "id"
+          ],
+          "schema": [
+            {
+              "id": "id",
+              "displayName": "id",
+              "required": false,
+              "defaultMatch": true,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true,
+              "removed": true
+            },
+            {
+              "id": "id_wiadomosci",
+              "displayName": "id_wiadomosci",
+              "required": true,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "nazwa_pliku",
+              "displayName": "nazwa_pliku",
+              "required": true,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "data_otrzymania",
+              "displayName": "data_otrzymania",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "dateTime",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "data_przetworzenia",
+              "displayName": "data_przetworzenia",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "dateTime",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "powod",
+              "displayName": "powod",
+              "required": true,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "szczegoly",
+              "displayName": "szczegoly",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "surowy_odczyt",
+              "displayName": "surowy_odczyt",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": true
+            },
+            {
+              "id": "status_obslugi",
+              "displayName": "status_obslugi",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        1152,
+        416
+      ],
+      "id": "881fea44-66f1-499d-942a-f6e902925028",
+      "name": "Zapisz do weryfikacji — inny plik",
+      "credentials": {
+        "postgres": {
+          "id": "RAZv2AIf231fmI0U",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "schema": {
+          "__rl": true,
+          "mode": "list",
+          "value": "public"
+        },
+        "table": {
+          "__rl": true,
+          "value": "do_weryfikacji",
+          "mode": "list",
+          "cachedResultName": "do_weryfikacji"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "id_wiadomosci": "={{ $('Wyciągnij tekst z PDF').item.json.idWiadomosci }}",
+            "nazwa_pliku": "={{ $('Wyciągnij tekst z PDF').item.json.nazwaPliku }}",
+            "powod": "blad_zapisu",
+            "data_otrzymania": "={{ $('Wyciągnij tekst z PDF').item.json.data }}",
+            "szczegoly": "={{ $json.error.message }}",
+            "surowy_odczyt": "={{ $('Wyciągnij tekst z PDF').item.json.text }}",
+            "id": 0
+          },
+          "matchingColumns": [
+            "id"
+          ],
+          "schema": [
+            {
+              "id": "id",
+              "displayName": "id",
+              "required": false,
+              "defaultMatch": true,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "id_wiadomosci",
+              "displayName": "id_wiadomosci",
+              "required": true,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "nazwa_pliku",
+              "displayName": "nazwa_pliku",
+              "required": true,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "data_otrzymania",
+              "displayName": "data_otrzymania",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "dateTime",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "data_przetworzenia",
+              "displayName": "data_przetworzenia",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "dateTime",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "powod",
+              "displayName": "powod",
+              "required": true,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "szczegoly",
+              "displayName": "szczegoly",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "surowy_odczyt",
+              "displayName": "surowy_odczyt",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "status_obslugi",
+              "displayName": "status_obslugi",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        1904,
+        32
+      ],
+      "id": "bb142777-ebbf-4ad5-8664-ad0e45ad1e05",
+      "name": "Błąd zapisu",
+      "credentials": {
+        "postgres": {
+          "id": "RAZv2AIf231fmI0U",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "numberInputs": 4
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        2288,
+        80
+      ],
+      "id": "3cc0dec1-aae1-4ac0-8b46-15e6b43b8bd2",
+      "name": "Merge"
+    },
+    {
+      "parameters": {
+        "schema": {
+          "__rl": true,
+          "mode": "list",
+          "value": "public"
+        },
+        "table": {
+          "__rl": true,
+          "value": "logi_wykonan",
+          "mode": "list",
+          "cachedResultName": "logi_wykonan"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "liczba_rekordow": "={{ $('Rozbij załączniki').all().length }}",
+            "liczba_maili": 0,
+            "liczba_zapisanych": "={{ $('Zapisz fakturę').all().length }}",
+            "liczba_do_weryfikacji": "={{ $('Zapisz do weryfikacji — nie faktura').all().length + $('Zapisz do weryfikacji — inny plik').all().length + $('Błąd zapisu').all().length }}",
+            "nazwa_przeplywu": "faktury-z-maila",
+            "status": "OK"
+          },
+          "matchingColumns": [
+            "id"
+          ],
+          "schema": [
+            {
+              "id": "id",
+              "displayName": "id",
+              "required": false,
+              "defaultMatch": true,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true,
+              "removed": true
+            },
+            {
+              "id": "data_wykonania",
+              "displayName": "data_wykonania",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "dateTime",
+              "canBeUsedToMatch": true,
+              "removed": true
+            },
+            {
+              "id": "liczba_rekordow",
+              "displayName": "liczba_rekordow",
+              "required": true,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "liczba_maili",
+              "displayName": "liczba_maili",
+              "required": true,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "status",
+              "displayName": "status",
+              "required": true,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "komunikat_bledu",
+              "displayName": "komunikat_bledu",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": true
+            },
+            {
+              "id": "czas_trwania_ms",
+              "displayName": "czas_trwania_ms",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true,
+              "removed": true
+            },
+            {
+              "id": "nazwa_przeplywu",
+              "displayName": "nazwa_przeplywu",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "liczba_zapisanych",
+              "displayName": "liczba_zapisanych",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "liczba_do_weryfikacji",
+              "displayName": "liczba_do_weryfikacji",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        2512,
+        80
+      ],
+      "id": "31fc2049-1a6c-45f4-b0af-c25b44e021fc",
+      "name": "Insert rows in a table",
+      "executeOnce": true,
+      "credentials": {
+        "postgres": {
+          "id": "RAZv2AIf231fmI0U",
+          "name": "Postgres account"
+        }
+      }
+    }
+  ],
+  "pinData": {
+    "Email Trigger (IMAP)": [
+      {
+        "json": {
+          "headers": {
+            "return-path": "Return-path: <jaaacek@gmail.com>",
+            "delivered-to": "Delivered-To: automat@grotbhp.pl",
+            "received": "Received: from [192.168.1.104] (24-18.tepsanet.com. [31.41.24.18])\r\n        by smtp.gmail.com with ESMTPSA id a640c23a62f3a-c250a9ec343sm266589466b.57.2026.08.26.00.47.25\r\n        for <automat@grotbhp.pl>\r\n        (version=TLS1_3 cipher=TLS_AES_128_GCM_SHA256 bits=128/128);\r\n        Wed, 26 Aug 2026 00:47:25 -0700 (PDT)",
+            "envelope-to": "Envelope-to: automat@grotbhp.pl",
+            "delivery-date": "Delivery-date: Wed, 26 Aug 2026 09:47:27 +0200",
+            "authentication-results": "Authentication-Results: s74.cyber-folks.pl;\r\n\tiprev=pass (mail-ej1-f53.google.com) smtp.remote-ip=209.85.218.53;\r\n\tspf=pass smtp.mailfrom=gmail.com;\r\n\tdkim=pass header.d=gmail.com header.s=20251104 header.a=rsa-sha256;\r\n\tdmarc=pass header.from=gmail.com",
+            "dkim-signature": "DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed;\r\n        d=gmail.com; s=20251104; t=1787730447; x=1788335247; darn=grotbhp.pl;\r\n        h=content-transfer-encoding:content-type:content-language:to:subject\r\n         :from:user-agent:mime-version:date:message-id:from:to:cc:subject\r\n         :date:message-id:reply-to:content-type;\r\n        bh=Y0Q79Cpz9Y3FMSqmdDnddC3tw5krdEA0Ye7oW9W52Sk=;\r\n        b=ojAHOFtTTIvoiroOlMaha4mLw8X0T9t2ziOVHsAN+1iF4jZ3f1+wpLFY/ZL2o12nhg\r\n         f8B5999ATPcC92pcCqcims2BWsxiEpK18+KWkK5uADbGbBgoD1N7E0w5NGD7qivzxlsH\r\n         r4qWjMIwAejaJJQWSacXInDg6cg19Bh8XfJatpwsCtz/ky4Mwnjj6jCydkofmiJzUszE\r\n         m7iAP+fRrnAlV+KzoUaDmMtQeMHleEtWQbagRGjFDTuiuOSw3x1A2yZbuqArCJFySvfp\r\n         RqQ+ZQHbPNJT+zIfUzG9VV6bOJ+uAN495yj/hDvvLOj0uS7wKbJLhB4EJbi27OYC/G6S\r\n         zxOA==",
+            "x-google-dkim-signature": "X-Google-DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed;\r\n        d=1e100.net; s=20251104; t=1787730447; x=1788335247;\r\n        h=content-transfer-encoding:content-type:content-language:to:subject\r\n         :from:user-agent:mime-version:date:message-id:x-gm-gg\r\n         :x-gm-message-state:from:to:cc:subject:date:message-id:reply-to\r\n         :content-type;\r\n        bh=Y0Q79Cpz9Y3FMSqmdDnddC3tw5krdEA0Ye7oW9W52Sk=;\r\n        b=XZcb+cXAQ98/8eXEgpaVzdGmbz1Z4GWmYjA+so2swDyF1nGy47qgOLN2/9CmsMWY0S\r\n         NJmNIph2LCaBXFeqRTc5HkINDdGeB573XXhEk5MEr7AVVeHqQsWjnDDTgg5cCp9xoRlp\r\n         msT8L0eFhIADdLcI2cuk8TEJt7K6qlndm9jfbCJCi63b/6j6fySueAT/0g9yUqikvM6B\r\n         UXJBg6GIbbZJoor327qr7ylNUO8VHKjkLTvo+CQD7pfxyt6UTT491uRmsKpqB6EeD6qm\r\n         XPi58AbekNPS4hzucVvOGzVGoLu82TMg+wQWOIDeIY/lcXz2Q0LWmSbc9uZHUUXPvemZ\r\n         FMRw==",
+            "x-gm-message-state": "X-Gm-Message-State: AFuF++mmKHdZknmtKajCGKwK/nHtnjLz2elg93Bs1QiC6aEre27MfzR2\r\n\tYanx7ePsTqp9GgBMkkzY+U2c6Bgj2Q65YZOO4eqHz0DAYFTeERgzntuKqHTsLU9l",
+            "x-gm-gg": "X-Gm-Gg: AR+sD11+nq37tqcLT4Zu4tZ6di1m3Yd0nMZW7CRb1kjkBrMO+ur5PktdhbyKz69GaGE\r\n\t1izryS6eTPFELjX/cixehrbIkUPzPWFV5YLpW1Ns8zpJcckindorVA2kUrCuBgY2AxxfKmLVD+d\r\n\tdAOE+AcyK541ENe8Xu2z4yYKwMlT/JVsPjshHzmolRkrZUaZfCt3WBzHU88NLZr2UvIgbQYkOhC\r\n\tyE6BLOtNhW/Kn55AVdiGURxbGu/qr6G7855ofBgr/M2xtbUSN+itRL4spwxgbYNICaNpQhk1jau\r\n\tRlEgN64jGDciNRI0Du8cEJyGZjunUKps4uvAxuJX5I9WJNdorEX2Pj+wEK9X2SQwdHx3T5evEh6\r\n\tQ3jY4slwd4dVPhaPob+Jyjcrf9VNq9aSMnnYxDZ4ozR3TB/UHLPdwZYGYAOC+Oue/QuqkcL9O7I\r\n\t/biWZiC1wYocqlFLtrU5t8UTPCW8X9P0ag8+W5nSiqANBKeQ5e32/dImlYb7EevEAqMPS7dd3ur\r\n\tKtsjgJ5gBGPRyp/ig==",
+            "x-received": "X-Received: by 2002:a17:906:c149:b0:c12:b2db:873d with SMTP id a640c23a62f3a-c250bac808emr524928866b.5.1787730446576;\r\n        Wed, 26 Aug 2026 00:47:26 -0700 (PDT)",
+            "message-id": "Message-ID: <b4efe533-a51c-4aaf-8b9c-640c51654291@gmail.com>",
+            "date": "Date: Wed, 26 Aug 2026 09:45:41 +0200",
+            "mime-version": "MIME-Version: 1.0",
+            "user-agent": "User-Agent: Mozilla Thunderbird",
+            "from": "From: Jacek Szulc <jaaacek@gmail.com>",
+            "subject": "Subject: Email testowy",
+            "to": "To: automat@grotbhp.pl",
+            "content-language": "Content-Language: pl",
+            "content-type": "Content-Type: text/plain; charset=UTF-8; format=flowed",
+            "content-transfer-encoding": "Content-Transfer-Encoding: 8bit",
+            "forward-confirmed-reversedns": "Forward-Confirmed-ReverseDNS: Reverse and forward lookup success on 209.85.218.53, -10 Spam score",
+            "spfcheck": "SPFCheck: Server passes SPF test, -30 Spam score",
+            "x-dkim": "X-DKIM: signer='gmail.com' status='pass' reason=''",
+            "dkimcheck": "DKIMCheck: Server passes DKIM test, -20 Spam score",
+            "x-spam-score": "X-Spam-Score: -1.0 (-)",
+            "x-spam-report": "X-Spam-Report: Spam detection software, running on the system \"s74.cyber-folks.pl\",\r\n has identified this incoming email as possible spam. The original\r\n message has been attached to this so you can view it or label\r\n similar future email. If you have any questions, see\r\n the administrator of that system for details.\r\n Content preview:  PrzesyÅam email testowy bez zaÅÄcznika. \r\n Content analysis details:   (-1.0 points, 6.0 required)\r\n pts rule name              description\r\n ---- ---------------------- --------------------------------------------------\r\n  0.0 RCVD_IN_DNSWL_BLOCKED  RBL: ADMINISTRATOR NOTICE: The query to DNSWL\r\n                             was blocked.  See\r\n                             http://wiki.apache.org/spamassassin/DnsBlocklists#DnsBlocklists-dnsbl-block\r\n                              for more information.\r\n                             [209.85.218.53 listed in list.dnswl.org]\r\n -0.0 SPF_PASS               SPF: sender matches SPF record\r\n  0.0 SPF_HELO_NONE          SPF: HELO does not publish an SPF Record\r\n  0.1 DKIM_SIGNED            Message has a DKIM or DK signature, not necessarily valid\r\n -0.1 DKIM_VALID_AU          Message has a valid DKIM or DK signature from author's\r\n                             domain\r\n -0.1 DKIM_VALID_EF          Message has a valid DKIM or DK signature from\r\n                             envelope-from domain\r\n  1.1 DCC_CHECK              Detected as bulk mail by DCC (dcc-servers.net)\r\n -0.1 DKIM_VALID             Message has at least one valid DKIM or DK signature\r\n -1.9 BAYES_00               BODY: Bayes spam probability is 0 to 1%\r\n                             [score: 0.0086]\r\n  0.0 FREEMAIL_FROM          Sender email is commonly abused enduser mail provider\r\n                             [jaaacek(at)gmail.com]\r\n  0.0 RCVD_IN_MSPIKE_H3      RBL: Good reputation (+3)\r\n                             [209.85.218.53 listed in wl.mailspike.net]\r\n  0.0 RCVD_IN_MSPIKE_WL      Mailspike good senders\r\n  0.0 RCVD_IN_VALIDITY_RPBL_BLOCKED RBL: ADMINISTRATOR NOTICE: The query to\r\n                              Validity was blocked.  See\r\n                             https://knowledge.validity.com/hc/en-us/articles/20961730681243\r\n                              for more information.\r\n                             [209.85.218.53 listed in bl.score.senderscore.com]\r\n  0.0 RCVD_IN_VALIDITY_CERTIFIED_BLOCKED RBL: ADMINISTRATOR NOTICE: The\r\n                             query to Validity was blocked.  See\r\n                             https://knowledge.validity.com/hc/en-us/articles/20961730681243\r\n                              for more information.\r\n                          [209.85.218.53 listed in sa-trusted.bondedsender.org]\r\n  0.0 RCVD_IN_VALIDITY_SAFE_BLOCKED RBL: ADMINISTRATOR NOTICE: The query to\r\n                              Validity was blocked.  See\r\n                             https://knowledge.validity.com/hc/en-us/articles/20961730681243\r\n                              for more information.\r\n                             [209.85.218.53 listed in sa-accredit.habeas.com]",
+            "spamtally": "SpamTally: Final spam score: -69",
+            "x-dmarc-domain-policy": "X-DMARC-Domain-Policy: none",
+            "x-antivirus-scanner": "X-Antivirus-Scanner: Clean mail though you should still use an Antivirus"
+          },
+          "text": "Przesyłam email testowy bez załącznika.\n",
+          "textAsHtml": "<p>Przesy&lstrok;am email testowy bez za&lstrok;&aogon;cznika.</p>",
+          "subject": "Email testowy",
+          "date": "2026-08-26T07:45:41.000Z",
+          "to": {
+            "value": [
+              {
+                "address": "automat@grotbhp.pl",
+                "name": ""
+              }
+            ],
+            "html": "<span class=\"mp_address_group\"><a href=\"mailto:automat@grotbhp.pl\" class=\"mp_address_email\">automat@grotbhp.pl</a></span>",
+            "text": "automat@grotbhp.pl"
+          },
+          "from": {
+            "value": [
+              {
+                "address": "jaaacek@gmail.com",
+                "name": "Jacek Szulc"
+              }
+            ],
+            "html": "<span class=\"mp_address_group\"><span class=\"mp_address_name\">Jacek Szulc</span> &lt;<a href=\"mailto:jaaacek@gmail.com\" class=\"mp_address_email\">jaaacek@gmail.com</a>&gt;</span>",
+            "text": "\"Jacek Szulc\" <jaaacek@gmail.com>"
+          },
+          "messageId": "<b4efe533-a51c-4aaf-8b9c-640c51654291@gmail.com>",
+          "html": false,
+          "attributes": {
+            "uid": 49
+          }
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      },
+      {
+        "json": {
+          "headers": {
+            "return-path": "Return-path: <jacek@szulc.cc>",
+            "delivered-to": "Delivered-To: automat@grotbhp.pl",
+            "received": "Received: from [192.168.1.104] (24-18.tepsanet.com. [31.41.24.18])\r\n        by smtp.gmail.com with ESMTPSA id a640c23a62f3a-c250a9ef382sm294199666b.58.2026.08.26.00.47.50\r\n        for <automat@grotbhp.pl>\r\n        (version=TLS1_3 cipher=TLS_AES_128_GCM_SHA256 bits=128/128);\r\n        Wed, 26 Aug 2026 00:47:50 -0700 (PDT)",
+            "envelope-to": "Envelope-to: automat@grotbhp.pl",
+            "delivery-date": "Delivery-date: Wed, 26 Aug 2026 09:47:53 +0200",
+            "authentication-results": "Authentication-Results: s74.cyber-folks.pl;\r\n\tiprev=pass (mail-ej1-f49.google.com) smtp.remote-ip=209.85.218.49;\r\n\tspf=softfail smtp.mailfrom=szulc.cc;\r\n\tdkim=pass header.d=szulc-cc.20251104.gappssmtp.com header.s=20251104 header.a=rsa-sha256;\r\n\tdmarc=none header.from=szulc.cc",
+            "dkim-signature": "DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed;\r\n        d=szulc-cc.20251104.gappssmtp.com; s=20251104; t=1787730472; x=1788335272; darn=grotbhp.pl;\r\n        h=content-language:to:subject:from:user-agent:mime-version:date\r\n         :message-id:content-type:from:to:cc:subject:date:message-id:reply-to\r\n         :content-type;\r\n        bh=5HLOhhaFYw5smZ9aN3PO4t+xa4HkRZFSj3n8/sSD/y0=;\r\n        b=fHhsXEQlXLJ4LHL8P0AqyoLCEqq5I5dhfiLP8kRzLcrqJFuUtIS8haY/2fvvl6nT0P\r\n         AmkTtzMjfg88AclUSBiqdKNgD7jk2XBswsoHs/6lge4KgQd6QAFuIVZqHGOpFfiLLOk0\r\n         5YZ5sWd9o4VmO5v4Dp6qJFPV9/WkFlk68gRf72MwojY1qFapDpPFjUQEE/171AKMwYxZ\r\n         4/bLPzuvnm6+hiqCkp4WlYPRsufTktPRpYi2GhU+ZYBTGRPcVP/bgBJykzgk4DcV2uY9\r\n         86uc/xbppaUaLm+Tqf/lXW7X/VH21mO4Yu1iNPrkHOqfGvvuVlNeMYJ87J7/M74vL461\r\n         b7EA==",
+            "x-google-dkim-signature": "X-Google-DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed;\r\n        d=1e100.net; s=20251104; t=1787730472; x=1788335272;\r\n        h=content-language:to:subject:from:user-agent:mime-version:date\r\n         :message-id:content-type:x-gm-gg:x-gm-message-state:from:to:cc\r\n         :subject:date:message-id:reply-to:content-type;\r\n        bh=5HLOhhaFYw5smZ9aN3PO4t+xa4HkRZFSj3n8/sSD/y0=;\r\n        b=mRAZ8J76EcpALNLWv4vKELnPRH60Hl8ze8lg9ASUStP56cbr+TVGAGhTqr9m7a7vjO\r\n         F3h0N2R9Mmb36dXcaNGA5YRcnlmZEWs4rleew7giA8AddA2R1GuesvbOhrD179q6C1ud\r\n         lMfyVuWrv2Wd0u9AdMkg/0gFwfATGtyGKukm3QgyKDGTBMcZ4dJkOmdqXueJzpxMpvR+\r\n         BgBtFc9JM4Fh1IXvqNuzcAK5oiz34UDYK3iK6R7fG44I7gFsSFGkQQASEKpRtJXSIGJt\r\n         lpVcP0cqSHuPumAdK1sVwEvNePN7lNgPL8d8kuaHV1ha17x6Wb8d+sfePCZhPUZElepg\r\n         W1xQ==",
+            "x-gm-message-state": "X-Gm-Message-State: AFuF++k3Lpf85OrymMhDlFpuD+S0CGgm6WPxkn+TW/mZXyQopifoAd7u\r\n\tZli+FQyOPxG/bVb/Rhvg7lOdGdyNdL30xXhWeEGuHkh+YUvYfIueKSXBLfKE0v60rC65GQamzBv\r\n\tHGsJGaLxp",
+            "x-gm-gg": "X-Gm-Gg: AR+sD126u6zEkkt+TLq0AZURlTmemNdYowi24FLykqLWfimy2OAhhtWHqg21z7MpggV\r\n\tHrfzX4/ndEVtIPA4tuzmnFxb/Lq6lww2xvvxPPRWGljkzNQ81iQr7EjuFIFz1GZSxK1n4vxk71l\r\n\tttOEqAVsHJG0xkmjZXKCtPDKVTxo/Da2DGN3nnzvcrqU/GnjyE5/hypppCfc/0G5/I95ODcBtSm\r\n\t7NWeDUS9NeOisRT3x92e0sZjGBZiZFpBcHvX0h3i4vd23Ap7K0FQJIAQawya94RAD01Oc28FS1l\r\n\tFYrKhdNB7sjdtjZ5DbHA9LAtCSift55hVDVIW5mfiLy5chaWk57brYbqJ9PSrzPYXwuwcga1WGv\r\n\tNnGsy4f3nZleRnMskJG3U8BRMaWBsAkuldSmfAKEmKCt3CPNofZTQ/ATP4glKOUSOS11GssiEPh\r\n\tk3PcYEBwaSkod1wWKkrQR+fgTV0eNwPOdGJTSRmoJlKn+iVYbt8pgZ4pt7BVlLzdjTcY7d49BeA\r\n\tiBZPdsi4l49iKxHd7mBWVs=",
+            "x-received": "X-Received: by 2002:a17:906:9f92:b0:c20:a243:9a52 with SMTP id a640c23a62f3a-c250a7c9f4cmr688523466b.0.1787730471325;\r\n        Wed, 26 Aug 2026 00:47:51 -0700 (PDT)",
+            "content-type": "Content-Type: multipart/mixed; boundary=\"------------7McDHN5F4fEF0uN9bK8v3s2b\"",
+            "message-id": "Message-ID: <c5d2c4c3-442c-4295-abbd-e0f1ed6c687f@szulc.cc>",
+            "date": "Date: Wed, 26 Aug 2026 09:46:06 +0200",
+            "mime-version": "MIME-Version: 1.0",
+            "user-agent": "User-Agent: Mozilla Thunderbird",
+            "from": "From: Jacek Szulc <jacek@szulc.cc>",
+            "subject": "Subject: Faktura bez nip",
+            "to": "To: automat@grotbhp.pl",
+            "content-language": "Content-Language: pl",
+            "forward-confirmed-reversedns": "Forward-Confirmed-ReverseDNS: Reverse and forward lookup success on 209.85.218.49, -10 Spam score",
+            "spfcheck": "SPFCheck: Soft Fail, 30 Spam score",
+            "x-dkim": "X-DKIM: signer='szulc-cc.20251104.gappssmtp.com' status='pass' reason=''",
+            "dkimcheck": "DKIMCheck: Server passes DKIM test, -20 Spam score",
+            "x-spam-score": "X-Spam-Score: 5.1 (+++++)",
+            "x-spam-report": "X-Spam-Report: Spam detection software, running on the system \"s74.cyber-folks.pl\",\r\n has identified this incoming email as possible spam. The original\r\n message has been attached to this so you can view it or label\r\n similar future email. If you have any questions, see\r\n the administrator of that system for details.\r\n Content preview:  Faktura bez nip \r\n Content analysis details:   (5.1 points, 6.0 required)\r\n pts rule name              description\r\n ---- ---------------------- --------------------------------------------------\r\n  0.0 RCVD_IN_DNSWL_BLOCKED  RBL: ADMINISTRATOR NOTICE: The query to DNSWL\r\n                             was blocked.  See\r\n                             http://wiki.apache.org/spamassassin/DnsBlocklists#DnsBlocklists-dnsbl-block\r\n                              for more information.\r\n                             [209.85.218.49 listed in list.dnswl.org]\r\n  0.0 RCVD_IN_MSPIKE_H3      RBL: Good reputation (+3)\r\n                             [209.85.218.49 listed in wl.mailspike.net]\r\n  4.0 SPF_SOFTFAIL           SPF: sender does not match SPF record (softfail)\r\n  0.0 SPF_HELO_NONE          SPF: HELO does not publish an SPF Record\r\n  0.1 DKIM_SIGNED            Message has a DKIM or DK signature, not necessarily valid\r\n  1.1 DCC_CHECK              Detected as bulk mail by DCC (dcc-servers.net)\r\n -0.1 DKIM_VALID             Message has at least one valid DKIM or DK signature\r\n  0.0 RCVD_IN_MSPIKE_WL      Mailspike good senders\r\n -0.0 BAYES_20               BODY: Bayes spam probability is 5 to 20%\r\n                             [score: 0.0670]\r\n  0.0 RCVD_IN_VALIDITY_CERTIFIED_BLOCKED RBL: ADMINISTRATOR NOTICE: The\r\n                             query to Validity was blocked.  See\r\n                             https://knowledge.validity.com/hc/en-us/articles/20961730681243\r\n                              for more information.\r\n                          [209.85.218.49 listed in sa-trusted.bondedsender.org]\r\n  0.0 RCVD_IN_VALIDITY_SAFE_BLOCKED RBL: ADMINISTRATOR NOTICE: The query to\r\n                              Validity was blocked.  See\r\n                             https://knowledge.validity.com/hc/en-us/articles/20961730681243\r\n                              for more information.\r\n                             [209.85.218.49 listed in sa-accredit.habeas.com]\r\n  0.0 RCVD_IN_VALIDITY_RPBL_BLOCKED RBL: ADMINISTRATOR NOTICE: The query to\r\n                              Validity was blocked.  See\r\n                             https://knowledge.validity.com/hc/en-us/articles/20961730681243\r\n                              for more information.\r\n                             [209.85.218.49 listed in bl.score.senderscore.com]",
+            "spamtally": "SpamTally: Final spam score: 51",
+            "x-dmarc-domain-policy": "X-DMARC-Domain-Policy: none",
+            "x-antivirus-scanner": "X-Antivirus-Scanner: Clean mail though you should still use an Antivirus"
+          },
+          "text": "Faktura bez nip",
+          "textAsHtml": "<p>Faktura bez nip</p>",
+          "subject": "Faktura bez nip",
+          "date": "2026-08-26T07:46:06.000Z",
+          "to": {
+            "value": [
+              {
+                "address": "automat@grotbhp.pl",
+                "name": ""
+              }
+            ],
+            "html": "<span class=\"mp_address_group\"><a href=\"mailto:automat@grotbhp.pl\" class=\"mp_address_email\">automat@grotbhp.pl</a></span>",
+            "text": "automat@grotbhp.pl"
+          },
+          "from": {
+            "value": [
+              {
+                "address": "jacek@szulc.cc",
+                "name": "Jacek Szulc"
+              }
+            ],
+            "html": "<span class=\"mp_address_group\"><span class=\"mp_address_name\">Jacek Szulc</span> &lt;<a href=\"mailto:jacek@szulc.cc\" class=\"mp_address_email\">jacek@szulc.cc</a>&gt;</span>",
+            "text": "\"Jacek Szulc\" <jacek@szulc.cc>"
+          },
+          "messageId": "<c5d2c4c3-442c-4295-abbd-e0f1ed6c687f@szulc.cc>",
+          "html": false,
+          "attributes": {
+            "uid": 50
+          }
+        },
+        "binary": {
+          "attachment_0": {
+            "mimeType": "application/pdf",
+            "fileType": "pdf",
+            "fileExtension": "pdf",
+            "data": "filesystem-v2",
+            "fileName": "faktura_bez_nip.pdf",
+            "id": "filesystem-v2:workflows/7lQh956tRtIh2BAw/executions/45/binary_data/b6f717fe-0dc5-41b5-9f1b-a1a327ea92f7",
+            "fileSize": "15.6 kB",
+            "bytes": 15641
+          }
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      },
+      {
+        "json": {
+          "headers": {
+            "return-path": "Return-path: <jacek@szulc.cc>",
+            "delivered-to": "Delivered-To: automat@grotbhp.pl",
+            "received": "Received: from [192.168.1.104] (24-18.tepsanet.com. [31.41.24.18])\r\n        by smtp.gmail.com with ESMTPSA id a640c23a62f3a-c250a88af72sm422502266b.36.2026.08.26.00.47.57\r\n        for <automat@grotbhp.pl>\r\n        (version=TLS1_3 cipher=TLS_AES_128_GCM_SHA256 bits=128/128);\r\n        Wed, 26 Aug 2026 00:47:57 -0700 (PDT)",
+            "envelope-to": "Envelope-to: automat@grotbhp.pl",
+            "delivery-date": "Delivery-date: Wed, 26 Aug 2026 09:47:59 +0200",
+            "authentication-results": "Authentication-Results: s74.cyber-folks.pl;\r\n\tiprev=pass (mail-ej1-f42.google.com) smtp.remote-ip=209.85.218.42;\r\n\tspf=softfail smtp.mailfrom=szulc.cc;\r\n\tdkim=pass header.d=szulc-cc.20251104.gappssmtp.com header.s=20251104 header.a=rsa-sha256;\r\n\tdmarc=none header.from=szulc.cc",
+            "dkim-signature": "DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed;\r\n        d=szulc-cc.20251104.gappssmtp.com; s=20251104; t=1787730478; x=1788335278; darn=grotbhp.pl;\r\n        h=content-language:to:subject:from:user-agent:mime-version:date\r\n         :message-id:content-type:from:to:cc:subject:date:message-id:reply-to\r\n         :content-type;\r\n        bh=v6/mZZBEcTvUID9ugBpOG72aKvmUdvzn1sL6y9ze1w0=;\r\n        b=OiLs6qM1CWwUdcTjjF+Kebe1rFOTKD/WI2Vuopgi2cbx0EGy03q/IpfikGxpYP/g41\r\n         PhagQMxWS9rk8eab7G2eSCcckncGhEhiR6fWZE8tCdetBoh5JGwF+dxIhHK8akhvXP6O\r\n         iGoRnHJCOVM3hbI4S1hKPF5PMePU5HEcSolk/rdxyKweK6FwzenJ5PLdxz+7byTHbnCx\r\n         xq6s7swcrMAkKNLK3l9m0k3V57UhUtFVDl7x3+gahsZPd+ObAS614oeJymvf8nn6/CBU\r\n         H8wEnHlhN5bzzt3dB7XMJ7CGzch31mo7ZgevmiNoonVjzgwXd+/gxEkDVnl4QdycA/Ae\r\n         lX2Q==",
+            "x-google-dkim-signature": "X-Google-DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed;\r\n        d=1e100.net; s=20251104; t=1787730478; x=1788335278;\r\n        h=content-language:to:subject:from:user-agent:mime-version:date\r\n         :message-id:content-type:x-gm-gg:x-gm-message-state:from:to:cc\r\n         :subject:date:message-id:reply-to:content-type;\r\n        bh=v6/mZZBEcTvUID9ugBpOG72aKvmUdvzn1sL6y9ze1w0=;\r\n        b=Qk0G9mzNKurH315+ZU5cgcz3rk17/FYuoJv19lXJQdV6juI14ZTAGZc5/ijNrTHDRa\r\n         iMzjRlOwbRjRJThZr5yV9BFRS9uoQTEMjCePjWfNcbt5z07TcEsnn7cEl/A5Q0XMjO7c\r\n         Y9URESyjHNJHnn6UiZdypN9YvgxlJknJpFXa1gEWh+Y6Linumj3WoT7+07QdZ8t5N8U+\r\n         H6tavrKpvOprLuiS15CY21IXawYT2be7S+IDAVHAuLWwaVAGCoWQEqVLag33lduLoS4U\r\n         m2Da0n1CYpbqzISiTRq10W59SiE7yKWGkYmGTLtUMmt9TdyqOVfT5HmTXSD4n/T2Hgo6\r\n         99UQ==",
+            "x-gm-message-state": "X-Gm-Message-State: AFuF++nWUuNdXCrpQUmIiD/2XrHq9/gbtC7prMa/hr2knS5pgvjYY0SD\r\n\tJ/h8P0K1TJpMSHPVMJ3X8jObnsSILbTgIKjZkX3Mknm8Smk31YMQwbyKPlsFgY5m22zEQTbWALK\r\n\tL8Rqqbe0e",
+            "x-gm-gg": "X-Gm-Gg: AR+sD10Ha8AX7sCojrLLVZPfK8IaUom7sVwV0iAKWyFlQ1QiNvpvuLAz00xMvo2L+X7\r\n\tk8v9DBF9/TLxFDjAdu35Yn/BXrDZjEscmcU4cZ70uqLYs+D7D7La+v4iPqMrJjlBx0C1ZH1EJqb\r\n\tcX69E+kvPsEbXhggj+q43awr9iDfGAvpkE1B3sxpG7rhZSrq2OOq00JLQkUQce23NJ1K/lIqw7w\r\n\tmwshwY3AemLQ0W2JGFMBrP/D5nNZqxxZD3cFDXgUDAFhJBPoAyde31+1UK8zxF6pDoN+JAF7eRX\r\n\tLL317AUWHIbN7aWu74/OvdRoRwonhz8eIYsHYddfeRg8suFhSJ3ecXTgEB95E0uZdjBabRFSl4K\r\n\t8rWLwG/MHv88QYh+xxaZz+m8yKR43Hx1JQNzoSU/CAsxHAQLMrnkJ55yhjZRoNibAD2W9RmB2b7\r\n\tadN1M7s4+bnQl5/0B1nQKsGmSe2yJNp3+eGfuiG1MECrxsdF2okmz4H8mKoBNXWGnMOfbWg4hFC\r\n\t2olOVLtotnH",
+            "x-received": "X-Received: by 2002:a17:907:5cb:b0:c08:580e:899a with SMTP id a640c23a62f3a-c250acf086fmr534546166b.10.1787730477799;\r\n        Wed, 26 Aug 2026 00:47:57 -0700 (PDT)",
+            "content-type": "Content-Type: multipart/mixed; boundary=\"------------6PS0uukJG1nel2n8key7BkIX\"",
+            "message-id": "Message-ID: <0391c91c-3eec-4afe-bf8a-94038b24d70a@szulc.cc>",
+            "date": "Date: Wed, 26 Aug 2026 09:46:13 +0200",
+            "mime-version": "MIME-Version: 1.0",
+            "user-agent": "User-Agent: Mozilla Thunderbird",
+            "from": "From: Jacek Szulc <jacek@szulc.cc>",
+            "subject": "Subject: Faktura",
+            "to": "To: automat@grotbhp.pl",
+            "content-language": "Content-Language: pl",
+            "forward-confirmed-reversedns": "Forward-Confirmed-ReverseDNS: Reverse and forward lookup success on 209.85.218.42, -10 Spam score",
+            "spfcheck": "SPFCheck: Soft Fail, 30 Spam score",
+            "x-dkim": "X-DKIM: signer='szulc-cc.20251104.gappssmtp.com' status='pass' reason=''",
+            "dkimcheck": "DKIMCheck: Server passes DKIM test, -20 Spam score",
+            "x-spam-score": "X-Spam-Score: 5.1 (+++++)",
+            "x-spam-report": "X-Spam-Report: Spam detection software, running on the system \"s74.cyber-folks.pl\",\r\n has identified this incoming email as possible spam. The original\r\n message has been attached to this so you can view it or label\r\n similar future email. If you have any questions, see\r\n the administrator of that system for details.\r\n Content preview:  PrzesyÅam fakturÄ \r\n Content analysis details:   (5.1 points, 6.0 required)\r\n pts rule name              description\r\n ---- ---------------------- --------------------------------------------------\r\n  0.0 RCVD_IN_DNSWL_BLOCKED  RBL: ADMINISTRATOR NOTICE: The query to DNSWL\r\n                             was blocked.  See\r\n                             http://wiki.apache.org/spamassassin/DnsBlocklists#DnsBlocklists-dnsbl-block\r\n                              for more information.\r\n                             [209.85.218.42 listed in list.dnswl.org]\r\n  0.0 RCVD_IN_MSPIKE_H3      RBL: Good reputation (+3)\r\n                             [209.85.218.42 listed in wl.mailspike.net]\r\n  4.0 SPF_SOFTFAIL           SPF: sender does not match SPF record (softfail)\r\n  0.0 SPF_HELO_NONE          SPF: HELO does not publish an SPF Record\r\n  0.1 DKIM_SIGNED            Message has a DKIM or DK signature, not necessarily valid\r\n  1.1 DCC_CHECK              Detected as bulk mail by DCC (dcc-servers.net)\r\n -0.1 DKIM_VALID             Message has at least one valid DKIM or DK signature\r\n  0.0 RCVD_IN_MSPIKE_WL      Mailspike good senders\r\n -0.0 BAYES_40               BODY: Bayes spam probability is 20 to 40%\r\n                             [score: 0.2735]\r\n  0.0 TVD_SPACE_RATIO        No description available.\r\n  0.0 RCVD_IN_VALIDITY_CERTIFIED_BLOCKED RBL: ADMINISTRATOR NOTICE: The\r\n                             query to Validity was blocked.  See\r\n                             https://knowledge.validity.com/hc/en-us/articles/20961730681243\r\n                              for more information.\r\n                          [209.85.218.42 listed in sa-trusted.bondedsender.org]\r\n  0.0 RCVD_IN_VALIDITY_SAFE_BLOCKED RBL: ADMINISTRATOR NOTICE: The query to\r\n                              Validity was blocked.  See\r\n                             https://knowledge.validity.com/hc/en-us/articles/20961730681243\r\n                              for more information.\r\n                             [209.85.218.42 listed in sa-accredit.habeas.com]\r\n  0.0 RCVD_IN_VALIDITY_RPBL_BLOCKED RBL: ADMINISTRATOR NOTICE: The query to\r\n                              Validity was blocked.  See\r\n                             https://knowledge.validity.com/hc/en-us/articles/20961730681243\r\n                              for more information.\r\n                             [209.85.218.42 listed in bl.score.senderscore.com]",
+            "spamtally": "SpamTally: Final spam score: 51",
+            "x-dmarc-domain-policy": "X-DMARC-Domain-Policy: none",
+            "x-antivirus-scanner": "X-Antivirus-Scanner: Clean mail though you should still use an Antivirus"
+          },
+          "text": "Przesyłam fakturę",
+          "textAsHtml": "<p>Przesy&lstrok;am faktur&eogon;</p>",
+          "subject": "Faktura",
+          "date": "2026-08-26T07:46:13.000Z",
+          "to": {
+            "value": [
+              {
+                "address": "automat@grotbhp.pl",
+                "name": ""
+              }
+            ],
+            "html": "<span class=\"mp_address_group\"><a href=\"mailto:automat@grotbhp.pl\" class=\"mp_address_email\">automat@grotbhp.pl</a></span>",
+            "text": "automat@grotbhp.pl"
+          },
+          "from": {
+            "value": [
+              {
+                "address": "jacek@szulc.cc",
+                "name": "Jacek Szulc"
+              }
+            ],
+            "html": "<span class=\"mp_address_group\"><span class=\"mp_address_name\">Jacek Szulc</span> &lt;<a href=\"mailto:jacek@szulc.cc\" class=\"mp_address_email\">jacek@szulc.cc</a>&gt;</span>",
+            "text": "\"Jacek Szulc\" <jacek@szulc.cc>"
+          },
+          "messageId": "<0391c91c-3eec-4afe-bf8a-94038b24d70a@szulc.cc>",
+          "html": false,
+          "attributes": {
+            "uid": 51
+          }
+        },
+        "binary": {
+          "attachment_0": {
+            "mimeType": "application/zip",
+            "fileExtension": "zip",
+            "data": "filesystem-v2",
+            "fileName": "05-archiwum.zip",
+            "id": "filesystem-v2:workflows/7lQh956tRtIh2BAw/executions/45/binary_data/de492bd8-083d-44a9-897a-b5f52e1dbb4c",
+            "fileSize": "16.6 kB",
+            "bytes": 16555
+          }
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      },
+      {
+        "json": {
+          "headers": {
+            "return-path": "Return-path: <jacek@szulc.cc>",
+            "delivered-to": "Delivered-To: automat@grotbhp.pl",
+            "received": "Received: from [192.168.1.104] (24-18.tepsanet.com. [31.41.24.18])\r\n        by smtp.gmail.com with ESMTPSA id 4fb4d7f45d1cf-6a5de8b6412sm2983053a12.2.2026.08.26.00.48.09\r\n        for <automat@grotbhp.pl>\r\n        (version=TLS1_3 cipher=TLS_AES_128_GCM_SHA256 bits=128/128);\r\n        Wed, 26 Aug 2026 00:48:09 -0700 (PDT)",
+            "envelope-to": "Envelope-to: automat@grotbhp.pl",
+            "delivery-date": "Delivery-date: Wed, 26 Aug 2026 09:48:11 +0200",
+            "authentication-results": "Authentication-Results: s74.cyber-folks.pl;\r\n\tiprev=pass (mail-ed1-f43.google.com) smtp.remote-ip=209.85.208.43;\r\n\tspf=softfail smtp.mailfrom=szulc.cc;\r\n\tdkim=pass header.d=szulc-cc.20251104.gappssmtp.com header.s=20251104 header.a=rsa-sha256;\r\n\tdmarc=none header.from=szulc.cc",
+            "dkim-signature": "DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed;\r\n        d=szulc-cc.20251104.gappssmtp.com; s=20251104; t=1787730490; x=1788335290; darn=grotbhp.pl;\r\n        h=content-language:to:subject:from:user-agent:mime-version:date\r\n         :message-id:content-type:from:to:cc:subject:date:message-id:reply-to\r\n         :content-type;\r\n        bh=31DkzL9yavQvt7Pt8g8vFUpVGcxNXfkHdA3Fo1fmLII=;\r\n        b=BZ3/nmGcrIZIkvMyz1LAzs54nfbDrok2BW7atEOYV86V2pc18iPod5X5INJJqKKr5F\r\n         +lW9aypXgJl+nbfSMq0+L3NrPehp8O97IOD82rWTuRqLEZIGDjRZXIX5GHIE7L1S0776\r\n         siKSCzIsKyU44LV8V+lG45WBSOZnfmipXcnW/OAkj5N6tEY/dfYQWCD1YYrLlzSwerpT\r\n         sWeLlFD0frPC36U/y6Shy0fO9QM/JQTfq+fbkkiuZ1cf1tIM0ykBem9C80uAsbLSbhha\r\n         28xz2KozXlPINVV4e9G46gyqtiaLdUPiBKIfa+tPRz/j8Xc90AVfBg+QL9k97su/+8BA\r\n         vTNg==",
+            "x-google-dkim-signature": "X-Google-DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed;\r\n        d=1e100.net; s=20251104; t=1787730490; x=1788335290;\r\n        h=content-language:to:subject:from:user-agent:mime-version:date\r\n         :message-id:content-type:x-gm-gg:x-gm-message-state:from:to:cc\r\n         :subject:date:message-id:reply-to:content-type;\r\n        bh=31DkzL9yavQvt7Pt8g8vFUpVGcxNXfkHdA3Fo1fmLII=;\r\n        b=D34KFskE3rAi/0UQXFRdkBq+AvByrQTyzQwMCVpU5TwsAFk0kPvZgTB7L29OA2ZxU3\r\n         52z46V9gJFVU+Dpro+pUZmyzK36pvZ/VQ48hJp09+vNIclZ15eMxqgITVKeDXPbZNgZ0\r\n         E8oeI7tjhZT2w1SdGHOKFualpr4zKffhFRNJC6sGW80KRpHfk5vNzEVDZgi78NbiiDoP\r\n         8CpG59Z89klNuawcLp1RxSn4gyLS5pXNBFaoizy5Mkjlpn8rR5I8H2YroWWcewZiYgYi\r\n         xv82WegJ9ONTEThS3I/XVPmJdNq8ZFRti1qOJZPCUolXpxm4iGdVdtPeH8BRCPDomS6B\r\n         41gQ==",
+            "x-gm-message-state": "X-Gm-Message-State: AFuF++kaSgu0fm4OzJ1D3uJ6xRBAuhnNZgwVPXjNCJmtWJIF73+YCW4j\r\n\tNKUEewrXq4Xr8P5rj7qwxF7n3X7KFxesTL30MOR9BDIjo809BsWTvKeO/X4gH4YUxIrElqS6ydS\r\n\tUv6+zvaM0",
+            "x-gm-gg": "X-Gm-Gg: AR+sD13JDb/507mdpELZGMkPm9MHlgM+HNMEvudhBNnHPgUwp8E2pcZGt9Nt8EAmmjD\r\n\tgSAJ8kXuWHET7np7kjZz60tJGdJq3f5lkaWex0NkfFpcz0tfp6PVUl23UGi2zOwRp/PlXKMbL6d\r\n\tg5tf1VHcKOXF8vn8jzEDvVNl7xRfnbhQzbnalecR5Sb/NcjJ9dhJPgEYoS9HcxyEqFfe5gofE3s\r\n\tct+TugKARTIsIt9HFf6/JGDEdVzzNnvMzoP2ETuR47CjzYDvKhDfe9WJjdJk2REumTjPo4x/UvR\r\n\tfwBcRwgivtqw5x+uc9JTTmk/gdyMfvMerpiLvSe5KEYo34VclYkw2Pgp3/uLJ4gMUsSa8K4Tru9\r\n\t57f6cbXHge7ATBk50tl/cCqkrp8cRR3psD2yUq/5h9jT2cEiWJA9ksjPzsRYFp1UIbLsnrpYs0Z\r\n\t2UdEp1pOgqNSU3elEOAm1bvw1qttlaW9scC8u2OTm4NABW1kAnT3AjTg2FvIRIMoek1pdsMXyNf\r\n\t3Hq0HBLStWT",
+            "x-received": "X-Received: by 2002:a05:6402:3548:b0:6a0:927e:39e2 with SMTP id 4fb4d7f45d1cf-6a5df5ce41cmr6094111a12.5.1787730489860;\r\n        Wed, 26 Aug 2026 00:48:09 -0700 (PDT)",
+            "content-type": "Content-Type: multipart/mixed; boundary=\"------------Jd7Ky2KWOHjpl3phBT53nyGE\"",
+            "message-id": "Message-ID: <76612194-478c-489f-8358-e37591834d53@szulc.cc>",
+            "date": "Date: Wed, 26 Aug 2026 09:46:25 +0200",
+            "mime-version": "MIME-Version: 1.0",
+            "user-agent": "User-Agent: Mozilla Thunderbird",
+            "from": "From: Jacek Szulc <jacek@szulc.cc>",
+            "subject": "Subject: Faktura test 2",
+            "to": "To: automat@grotbhp.pl",
+            "content-language": "Content-Language: pl",
+            "forward-confirmed-reversedns": "Forward-Confirmed-ReverseDNS: Reverse and forward lookup success on 209.85.208.43, -10 Spam score",
+            "spfcheck": "SPFCheck: Soft Fail, 30 Spam score",
+            "x-dkim": "X-DKIM: signer='szulc-cc.20251104.gappssmtp.com' status='pass' reason=''",
+            "dkimcheck": "DKIMCheck: Server passes DKIM test, -20 Spam score",
+            "x-spam-score": "X-Spam-Score: 5.1 (+++++)",
+            "x-spam-report": "X-Spam-Report: Spam detection software, running on the system \"s74.cyber-folks.pl\",\r\n has identified this incoming email as possible spam. The original\r\n message has been attached to this so you can view it or label\r\n similar future email. If you have any questions, see\r\n the administrator of that system for details.\r\n Content preview:  PrzesyÅam fakturÄ testowÄ nr 2 \r\n Content analysis details:   (5.1 points, 6.0 required)\r\n pts rule name              description\r\n ---- ---------------------- --------------------------------------------------\r\n  0.0 RCVD_IN_DNSWL_BLOCKED  RBL: ADMINISTRATOR NOTICE: The query to DNSWL\r\n                             was blocked.  See\r\n                             http://wiki.apache.org/spamassassin/DnsBlocklists#DnsBlocklists-dnsbl-block\r\n                              for more information.\r\n                             [209.85.208.43 listed in list.dnswl.org]\r\n  4.0 SPF_SOFTFAIL           SPF: sender does not match SPF record (softfail)\r\n  0.0 SPF_HELO_NONE          SPF: HELO does not publish an SPF Record\r\n  0.1 DKIM_SIGNED            Message has a DKIM or DK signature, not necessarily valid\r\n  1.1 DCC_CHECK              Detected as bulk mail by DCC (dcc-servers.net)\r\n -0.1 DKIM_VALID             Message has at least one valid DKIM or DK signature\r\n -0.0 BAYES_40               BODY: Bayes spam probability is 20 to 40%\r\n                             [score: 0.2399]\r\n  0.0 RCVD_IN_MSPIKE_H2      RBL: Average reputation (+2)\r\n                             [209.85.208.43 listed in wl.mailspike.net]\r\n  0.0 RCVD_IN_VALIDITY_RPBL_BLOCKED RBL: ADMINISTRATOR NOTICE: The query to\r\n                              Validity was blocked.  See\r\n                             https://knowledge.validity.com/hc/en-us/articles/20961730681243\r\n                              for more information.\r\n                             [209.85.208.43 listed in bl.score.senderscore.com]\r\n  0.0 RCVD_IN_VALIDITY_CERTIFIED_BLOCKED RBL: ADMINISTRATOR NOTICE: The\r\n                             query to Validity was blocked.  See\r\n                             https://knowledge.validity.com/hc/en-us/articles/20961730681243\r\n                              for more information.\r\n                          [209.85.208.43 listed in sa-trusted.bondedsender.org]\r\n  0.0 RCVD_IN_VALIDITY_SAFE_BLOCKED RBL: ADMINISTRATOR NOTICE: The query to\r\n                              Validity was blocked.  See\r\n                             https://knowledge.validity.com/hc/en-us/articles/20961730681243\r\n                              for more information.\r\n                             [209.85.208.43 listed in sa-accredit.habeas.com]",
+            "spamtally": "SpamTally: Final spam score: 51",
+            "x-dmarc-domain-policy": "X-DMARC-Domain-Policy: none",
+            "x-antivirus-scanner": "X-Antivirus-Scanner: Clean mail though you should still use an Antivirus"
+          },
+          "text": "Przesyłam fakturę testową nr 2",
+          "textAsHtml": "<p>Przesy&lstrok;am faktur&eogon; testow&aogon; nr 2</p>",
+          "subject": "Faktura test 2",
+          "date": "2026-08-26T07:46:25.000Z",
+          "to": {
+            "value": [
+              {
+                "address": "automat@grotbhp.pl",
+                "name": ""
+              }
+            ],
+            "html": "<span class=\"mp_address_group\"><a href=\"mailto:automat@grotbhp.pl\" class=\"mp_address_email\">automat@grotbhp.pl</a></span>",
+            "text": "automat@grotbhp.pl"
+          },
+          "from": {
+            "value": [
+              {
+                "address": "jacek@szulc.cc",
+                "name": "Jacek Szulc"
+              }
+            ],
+            "html": "<span class=\"mp_address_group\"><span class=\"mp_address_name\">Jacek Szulc</span> &lt;<a href=\"mailto:jacek@szulc.cc\" class=\"mp_address_email\">jacek@szulc.cc</a>&gt;</span>",
+            "text": "\"Jacek Szulc\" <jacek@szulc.cc>"
+          },
+          "messageId": "<76612194-478c-489f-8358-e37591834d53@szulc.cc>",
+          "html": false,
+          "attributes": {
+            "uid": 52
+          }
+        },
+        "binary": {
+          "attachment_0": {
+            "mimeType": "application/pdf",
+            "fileType": "pdf",
+            "fileExtension": "pdf",
+            "data": "filesystem-v2",
+            "fileName": "faktura_testowa-v2.pdf",
+            "id": "filesystem-v2:workflows/7lQh956tRtIh2BAw/executions/45/binary_data/a90246f9-88f0-491e-961f-cde9c80c874c",
+            "fileSize": "16.5 kB",
+            "bytes": 16466
+          }
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      },
+      {
+        "json": {
+          "headers": {
+            "return-path": "Return-path: <jacek@szulc.cc>",
+            "delivered-to": "Delivered-To: automat@grotbhp.pl",
+            "received": "Received: from [192.168.1.104] (24-18.tepsanet.com. [31.41.24.18])\r\n        by smtp.gmail.com with ESMTPSA id 4fb4d7f45d1cf-6a5de8d1c80sm2532245a12.10.2026.08.26.00.48.16\r\n        for <automat@grotbhp.pl>\r\n        (version=TLS1_3 cipher=TLS_AES_128_GCM_SHA256 bits=128/128);\r\n        Wed, 26 Aug 2026 00:48:16 -0700 (PDT)",
+            "envelope-to": "Envelope-to: automat@grotbhp.pl",
+            "delivery-date": "Delivery-date: Wed, 26 Aug 2026 09:48:18 +0200",
+            "authentication-results": "Authentication-Results: s74.cyber-folks.pl;\r\n\tiprev=pass (mail-ed1-f42.google.com) smtp.remote-ip=209.85.208.42;\r\n\tspf=softfail smtp.mailfrom=szulc.cc;\r\n\tdkim=pass header.d=szulc-cc.20251104.gappssmtp.com header.s=20251104 header.a=rsa-sha256;\r\n\tdmarc=none header.from=szulc.cc",
+            "dkim-signature": "DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed;\r\n        d=szulc-cc.20251104.gappssmtp.com; s=20251104; t=1787730497; x=1788335297; darn=grotbhp.pl;\r\n        h=content-language:to:subject:from:user-agent:mime-version:date\r\n         :message-id:content-type:from:to:cc:subject:date:message-id:reply-to\r\n         :content-type;\r\n        bh=NBoG+T8GKWsLi0vSiwm5FIBAeEtVcWldSrcEGsOrnBQ=;\r\n        b=OadmymvSEXYJ7Vuu13isBEx0O6t4YoqFhbqxuaXiZTyL1qYqPCJBEQgeYj5ZnTrZse\r\n         QuviZ8Yw6SdzsSc/Je/uHj/0MN4Te2Eckq2nLo4jlF3Plfk7s+rn5VYgePH2khH2eGiR\r\n         OmVVa12dRBF+4ZXHN7iRcevUbxIChgelEeGyS8tYSi0Wm3Rf20y3VXbKPMMwMCRKFgOp\r\n         fVObuZ6OHrUY0hGVl7Gc3ZlzsK/9HIaXy7RnCEiq8V1hjL5K9rS6WdbKcoeU9QJ7evFb\r\n         hbzvo6jxRa7DSDY06HNuEMloXHOJSiPezpURCfVbjMYHxJAaLsvI5K/YTo7CGIzOIPhT\r\n         koHQ==",
+            "x-google-dkim-signature": "X-Google-DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed;\r\n        d=1e100.net; s=20251104; t=1787730497; x=1788335297;\r\n        h=content-language:to:subject:from:user-agent:mime-version:date\r\n         :message-id:content-type:x-gm-gg:x-gm-message-state:from:to:cc\r\n         :subject:date:message-id:reply-to:content-type;\r\n        bh=NBoG+T8GKWsLi0vSiwm5FIBAeEtVcWldSrcEGsOrnBQ=;\r\n        b=Lbwuvy2/+NTtnZQJ+AzEB6s5EBbXkW5tTGUnHO9XO70dkiTcNEyQlKwghNJV5h8GE9\r\n         Mi+RFE018SVK09tbh2+UZVySZBPNP0/hXl8JrdpMaj/A15qGv523agKGGuM8uu4xurR+\r\n         zDah1chLpYuX1iDYFmNB37N7CTIJqI4CpWIbbEYrwVS2hFSHX2/YeJsRWLc3jNCEk/uR\r\n         J876Ks0utBcKj1Xf0dLdqIEersslUNAXSZc2CazLx7rU2Tco+WDUXcefgGjtLRKUV5aV\r\n         rU5MPU3IZXhmH7OHxoWQiSXng2taV2tBzncpPpIX3r4EiKSi8RyadRfEHuMM9EZHlb++\r\n         rxHA==",
+            "x-gm-message-state": "X-Gm-Message-State: AFuF++l/4kG2LK9ARkPyfcYzBMVcYuw/dQ+DAzvD/hskY1hgTU63hVay\r\n\tgkqFu29/HwDk/QwpjUtWI4y+SEWnSfcZpeyTplOVP/RlOP7Bi8oq5vmQ1KdRsBsvv1Ug2eLHx1V\r\n\tnA/mZJTdj",
+            "x-gm-gg": "X-Gm-Gg: AR+sD112mgYAa2RrGRM8v9dNJXt2kcN+euGA0LJZAPIXdK7WnujZ4VfU4CEWv3sXkdr\r\n\tg1p/zsimUCf1PeRU63abJH3uKKr4eUsScqz4MW3kvop2n6S6ZDGWfcxxXqNM3Jqn7pwx9FZ3G06\r\n\ts3XLsaWtxAhYBIAQsEc8NVc3K/1TO10IfNvLFEYy8JTqE3mq/H0a2IwTvA28RfUd/6aLEye1G2Z\r\n\t7LRsO8nGvePvskEUyoA6DpJ42r06WryCAJD56oVs3q9BuQcmUr4G9ARwDlMfuBpu2/zV2KdHpLF\r\n\tXupFEiV5KQw62eOiBsOq/WG2gEvrjhJgIiTk5lJg7cQ7wz9C+vPtxhz9rMhEMvSYuJ85hjvISEv\r\n\tlyVAmZ1TVRhIlmcMopQtivIVJsS08Al7vwxdYkbsHjq6yf5mdC8iqJssmtbaQvfRgcvzks7W77x\r\n\taZ6VwK5MpeZ4OhMqB+T8/WrNvImyRlRq+/vi+xKKSqH+ahuAFZozyNwZhxmzDFJD3FN4anYoyO0\r\n\tYVvrO27A7VVhFdKu6bAa1I=",
+            "x-received": "X-Received: by 2002:a05:6402:5419:b0:6a4:cc9:e32b with SMTP id 4fb4d7f45d1cf-6a5df62b860mr6611468a12.9.1787730496546;\r\n        Wed, 26 Aug 2026 00:48:16 -0700 (PDT)",
+            "content-type": "Content-Type: multipart/mixed; boundary=\"------------0vA4SWXMreqpLsdVf1rmaTv9\"",
+            "message-id": "Message-ID: <9aee17d0-a43a-4621-9e56-a9b4575897c6@szulc.cc>",
+            "date": "Date: Wed, 26 Aug 2026 09:46:32 +0200",
+            "mime-version": "MIME-Version: 1.0",
+            "user-agent": "User-Agent: Mozilla Thunderbird",
+            "from": "From: Jacek Szulc <jacek@szulc.cc>",
+            "subject": "Subject: Faktura i potwierdzenie przelewu",
+            "to": "To: automat@grotbhp.pl",
+            "content-language": "Content-Language: pl",
+            "forward-confirmed-reversedns": "Forward-Confirmed-ReverseDNS: Reverse and forward lookup success on 209.85.208.42, -10 Spam score",
+            "spfcheck": "SPFCheck: Soft Fail, 30 Spam score",
+            "x-dkim": "X-DKIM: signer='szulc-cc.20251104.gappssmtp.com' status='pass' reason=''",
+            "dkimcheck": "DKIMCheck: Server passes DKIM test, -20 Spam score",
+            "x-spam-score": "X-Spam-Score: 5.9 (+++++)",
+            "x-spam-report": "X-Spam-Report: Spam detection software, running on the system \"s74.cyber-folks.pl\",\r\n has identified this incoming email as possible spam. The original\r\n message has been attached to this so you can view it or label\r\n similar future email. If you have any questions, see\r\n the administrator of that system for details.\r\n Content preview:  PrzesyÅam fakturÄ i potwierdzenie przelewu. \r\n Content analysis details:   (5.9 points, 6.0 required)\r\n pts rule name              description\r\n ---- ---------------------- --------------------------------------------------\r\n  0.0 RCVD_IN_VALIDITY_SAFE_BLOCKED RBL: ADMINISTRATOR NOTICE: The query to\r\n                              Validity was blocked.  See\r\n                             https://knowledge.validity.com/hc/en-us/articles/20961730681243\r\n                              for more information.\r\n                             [209.85.208.42 listed in sa-accredit.habeas.com]\r\n  0.0 RCVD_IN_DNSWL_BLOCKED  RBL: ADMINISTRATOR NOTICE: The query to DNSWL\r\n                             was blocked.  See\r\n                             http://wiki.apache.org/spamassassin/DnsBlocklists#DnsBlocklists-dnsbl-block\r\n                              for more information.\r\n                             [209.85.208.42 listed in list.dnswl.org]\r\n  0.0 RCVD_IN_VALIDITY_RPBL_BLOCKED RBL: ADMINISTRATOR NOTICE: The query to\r\n                              Validity was blocked.  See\r\n                             https://knowledge.validity.com/hc/en-us/articles/20961730681243\r\n                              for more information.\r\n                             [209.85.208.42 listed in bl.score.senderscore.com]\r\n  0.0 RCVD_IN_VALIDITY_CERTIFIED_BLOCKED RBL: ADMINISTRATOR NOTICE: The\r\n                             query to Validity was blocked.  See\r\n                             https://knowledge.validity.com/hc/en-us/articles/20961730681243\r\n                              for more information.\r\n                          [209.85.208.42 listed in sa-trusted.bondedsender.org]\r\n  0.0 RCVD_IN_MSPIKE_H2      RBL: Average reputation (+2)\r\n                             [209.85.208.42 listed in wl.mailspike.net]\r\n  4.0 SPF_SOFTFAIL           SPF: sender does not match SPF record (softfail)\r\n  0.0 SPF_HELO_NONE          SPF: HELO does not publish an SPF Record\r\n  0.1 DKIM_SIGNED            Message has a DKIM or DK signature, not necessarily valid\r\n  1.1 DCC_CHECK              Detected as bulk mail by DCC (dcc-servers.net)\r\n -0.1 DKIM_VALID             Message has at least one valid DKIM or DK signature\r\n  0.8 BAYES_50               BODY: Bayes spam probability is 40 to 60%\r\n                             [score: 0.4257]",
+            "spamtally": "SpamTally: Final spam score: 59",
+            "x-dmarc-domain-policy": "X-DMARC-Domain-Policy: none",
+            "x-antivirus-scanner": "X-Antivirus-Scanner: Clean mail though you should still use an Antivirus"
+          },
+          "text": "Przesyłam fakturę i potwierdzenie przelewu.",
+          "textAsHtml": "<p>Przesy&lstrok;am faktur&eogon; i potwierdzenie przelewu.</p>",
+          "subject": "Faktura i potwierdzenie przelewu",
+          "date": "2026-08-26T07:46:32.000Z",
+          "to": {
+            "value": [
+              {
+                "address": "automat@grotbhp.pl",
+                "name": ""
+              }
+            ],
+            "html": "<span class=\"mp_address_group\"><a href=\"mailto:automat@grotbhp.pl\" class=\"mp_address_email\">automat@grotbhp.pl</a></span>",
+            "text": "automat@grotbhp.pl"
+          },
+          "from": {
+            "value": [
+              {
+                "address": "jacek@szulc.cc",
+                "name": "Jacek Szulc"
+              }
+            ],
+            "html": "<span class=\"mp_address_group\"><span class=\"mp_address_name\">Jacek Szulc</span> &lt;<a href=\"mailto:jacek@szulc.cc\" class=\"mp_address_email\">jacek@szulc.cc</a>&gt;</span>",
+            "text": "\"Jacek Szulc\" <jacek@szulc.cc>"
+          },
+          "messageId": "<9aee17d0-a43a-4621-9e56-a9b4575897c6@szulc.cc>",
+          "html": false,
+          "attributes": {
+            "uid": 53
+          }
+        },
+        "binary": {
+          "attachment_0": {
+            "mimeType": "application/pdf",
+            "fileType": "pdf",
+            "fileExtension": "pdf",
+            "data": "filesystem-v2",
+            "fileName": "02-potwierdzenie-przelewu.pdf",
+            "id": "filesystem-v2:workflows/7lQh956tRtIh2BAw/executions/45/binary_data/cc897f95-bd14-4d23-b8de-251f1eec0f5d",
+            "fileSize": "17 kB",
+            "bytes": 16998
+          },
+          "attachment_1": {
+            "mimeType": "application/pdf",
+            "fileType": "pdf",
+            "fileExtension": "pdf",
+            "data": "filesystem-v2",
+            "fileName": "03-faktura-3.pdf",
+            "id": "filesystem-v2:workflows/7lQh956tRtIh2BAw/executions/45/binary_data/5265581d-303a-45a4-9af5-c956c7b9871d",
+            "fileSize": "16.2 kB",
+            "bytes": 16219
+          }
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      },
+      {
+        "json": {
+          "headers": {
+            "return-path": "Return-path: <allegro@grotbhp.pl>",
+            "delivered-to": "Delivered-To: automat@grotbhp.pl",
+            "received": "Received: from 24-18.tepsanet.com ([31.41.24.18] helo=[192.168.1.104])\r\n\tby s74.cyber-folks.pl with esmtpsa  (TLS1.3) tls TLS_AES_256_GCM_SHA384\r\n\t(Exim 4.99.5)\r\n\t(envelope-from <allegro@grotbhp.pl>)\r\n\tid 1wz8RR-0000000CvHo-0I8e\r\n\tfor automat@grotbhp.pl;\r\n\tWed, 26 Aug 2026 09:53:01 +0200",
+            "envelope-to": "Envelope-to: automat@grotbhp.pl",
+            "delivery-date": "Delivery-date: Wed, 26 Aug 2026 09:53:02 +0200",
+            "x-spam-checker-version": "X-Spam-Checker-Version: SpamAssassin 4.0.2 (2025-08-27) on s74.cyber-folks.pl",
+            "x-spam-level": "X-Spam-Level: ",
+            "x-spam-status": "X-Spam-Status: No, score=-9.6 required=6.0 tests=ALL_TRUSTED,BAYES_00,\r\n\tDCC_CHECK,FSL_BULK_SIG shortcircuit=no autolearn=no autolearn_force=no\r\n\tversion=4.0.2",
+            "content-type": "Content-Type: multipart/mixed; boundary=\"------------rSCZjrMb4NZbM1AqOEIvyc8r\"",
+            "message-id": "Message-ID: <d43b8fe7-5c4b-40f7-8621-7fa379a15290@grotbhp.pl>",
+            "date": "Date: Wed, 26 Aug 2026 09:51:17 +0200",
+            "mime-version": "MIME-Version: 1.0",
+            "user-agent": "User-Agent: Mozilla Thunderbird",
+            "from": "From: \"GrotBHP.pl\" <allegro@grotbhp.pl>",
+            "subject": "Subject: Faktura test 1",
+            "to": "To: automat@grotbhp.pl",
+            "content-language": "Content-Language: pl"
+          },
+          "text": "Przesyłam fakturę testową nr 1",
+          "textAsHtml": "<p>Przesy&lstrok;am faktur&eogon; testow&aogon; nr 1</p>",
+          "subject": "Faktura test 1",
+          "date": "2026-08-26T07:51:17.000Z",
+          "to": {
+            "value": [
+              {
+                "address": "automat@grotbhp.pl",
+                "name": ""
+              }
+            ],
+            "html": "<span class=\"mp_address_group\"><a href=\"mailto:automat@grotbhp.pl\" class=\"mp_address_email\">automat@grotbhp.pl</a></span>",
+            "text": "automat@grotbhp.pl"
+          },
+          "from": {
+            "value": [
+              {
+                "address": "allegro@grotbhp.pl",
+                "name": "GrotBHP.pl"
+              }
+            ],
+            "html": "<span class=\"mp_address_group\"><span class=\"mp_address_name\">GrotBHP.pl</span> &lt;<a href=\"mailto:allegro@grotbhp.pl\" class=\"mp_address_email\">allegro@grotbhp.pl</a>&gt;</span>",
+            "text": "\"GrotBHP.pl\" <allegro@grotbhp.pl>"
+          },
+          "messageId": "<d43b8fe7-5c4b-40f7-8621-7fa379a15290@grotbhp.pl>",
+          "html": false,
+          "attributes": {
+            "uid": 54
+          }
+        },
+        "binary": {
+          "attachment_0": {
+            "mimeType": "application/pdf",
+            "fileType": "pdf",
+            "fileExtension": "pdf",
+            "data": "filesystem-v2",
+            "fileName": "faktura_testowa.pdf",
+            "id": "filesystem-v2:workflows/7lQh956tRtIh2BAw/executions/45/binary_data/f224b37e-667c-4fb1-a69d-4921862e7b12",
+            "fileSize": "15.9 kB",
+            "bytes": 15917
+          }
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      },
+      {
+        "json": {
+          "headers": {
+            "return-path": "Return-path: <kontakt@grotbhp.pl>",
+            "delivered-to": "Delivered-To: automat@grotbhp.pl",
+            "received": "Received: from 24-18.tepsanet.com ([31.41.24.18] helo=[192.168.1.104])\r\n\tby s74.cyber-folks.pl with esmtpsa  (TLS1.3) tls TLS_AES_256_GCM_SHA384\r\n\t(Exim 4.99.5)\r\n\t(envelope-from <kontakt@grotbhp.pl>)\r\n\tid 1wz8RY-0000000CvYl-10aS\r\n\tfor automat@grotbhp.pl;\r\n\tWed, 26 Aug 2026 09:53:08 +0200",
+            "envelope-to": "Envelope-to: automat@grotbhp.pl",
+            "delivery-date": "Delivery-date: Wed, 26 Aug 2026 09:53:08 +0200",
+            "content-type": "Content-Type: multipart/mixed; boundary=\"------------LMgGOffWYq3stPfctlrgKTxV\"",
+            "message-id": "Message-ID: <afa5ebbd-c90c-4336-bbe6-36fb0d882cd7@grotbhp.pl>",
+            "date": "Date: Wed, 26 Aug 2026 09:51:24 +0200",
+            "mime-version": "MIME-Version: 1.0",
+            "user-agent": "User-Agent: Mozilla Thunderbird",
+            "from": "From: \"GrotBHP.pl\" <kontakt@grotbhp.pl>",
+            "subject": "Subject: Faktura test 3",
+            "to": "To: automat@grotbhp.pl",
+            "content-language": "Content-Language: pl"
+          },
+          "text": "Przesyłam fakturę testową nr 3",
+          "textAsHtml": "<p>Przesy&lstrok;am faktur&eogon; testow&aogon; nr 3</p>",
+          "subject": "Faktura test 3",
+          "date": "2026-08-26T07:51:24.000Z",
+          "to": {
+            "value": [
+              {
+                "address": "automat@grotbhp.pl",
+                "name": ""
+              }
+            ],
+            "html": "<span class=\"mp_address_group\"><a href=\"mailto:automat@grotbhp.pl\" class=\"mp_address_email\">automat@grotbhp.pl</a></span>",
+            "text": "automat@grotbhp.pl"
+          },
+          "from": {
+            "value": [
+              {
+                "address": "kontakt@grotbhp.pl",
+                "name": "GrotBHP.pl"
+              }
+            ],
+            "html": "<span class=\"mp_address_group\"><span class=\"mp_address_name\">GrotBHP.pl</span> &lt;<a href=\"mailto:kontakt@grotbhp.pl\" class=\"mp_address_email\">kontakt@grotbhp.pl</a>&gt;</span>",
+            "text": "\"GrotBHP.pl\" <kontakt@grotbhp.pl>"
+          },
+          "messageId": "<afa5ebbd-c90c-4336-bbe6-36fb0d882cd7@grotbhp.pl>",
+          "html": false,
+          "attributes": {
+            "uid": 55
+          }
+        },
+        "binary": {
+          "attachment_0": {
+            "mimeType": "image/jpeg",
+            "fileType": "image",
+            "fileExtension": "jpg",
+            "data": "filesystem-v2",
+            "fileName": "04-skan-jpg.jpg",
+            "id": "filesystem-v2:workflows/7lQh956tRtIh2BAw/executions/45/binary_data/7f434321-d482-491c-adfc-8a77c4b9320c",
+            "fileSize": "3.09 MB",
+            "bytes": 3089933
+          }
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      }
+    ]
+  },
+  "connections": {
+    "Email Trigger (IMAP)": {
+      "main": [
+        [
+          {
+            "node": "Rozbij załączniki",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Gemini Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Wyciągnij dane faktury",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Structured Output Parser": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "Wyciągnij dane faktury",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Rozbij załączniki": {
+      "main": [
+        [
+          {
+            "node": "Filtr PDF",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filtr PDF": {
+      "main": [
+        [
+          {
+            "node": "Wyciągnij tekst z PDF",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Zapisz do weryfikacji — inny plik",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wyciągnij tekst z PDF": {
+      "main": [
+        [
+          {
+            "node": "Wyciągnij dane faktury",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wyciągnij dane faktury": {
+      "main": [
+        [
+          {
+            "node": "If",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If": {
+      "main": [
+        [
+          {
+            "node": "Zapisz fakturę",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Zapisz do weryfikacji — nie faktura",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Zapisz fakturę": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Błąd zapisu",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Błąd zapisu": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Zapisz do weryfikacji — nie faktura": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 2
+          }
+        ]
+      ]
+    },
+    "Zapisz do weryfikacji — inny plik": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 3
+          }
+        ]
+      ]
+    },
+    "Merge": {
+      "main": [
+        [
+          {
+            "node": "Insert rows in a table",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false,
+    "timeSavedMode": "fixed",
+    "errorWorkflow": "fIdzD51p0IgXu1DT",
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "versionId": "dc9aab37-02c4-4c86-9f49-0208b40723c0",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "8e79e4bd1d8563e921dc3e8f4a79b125a056d84f1aaef24a252eb23d7ff44174"
+  },
+  "nodeGroups": [],
+  "id": "7lQh956tRtIh2BAw",
+  "tags": []
+}
